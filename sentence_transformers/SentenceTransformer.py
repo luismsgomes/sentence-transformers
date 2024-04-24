@@ -95,6 +95,7 @@ class SentenceTransformer(nn.Sequential):
         self._model_card_vars = {}
         self._model_card_text = None
         self._model_config = {}
+        self.n_gpu = torch.cuda.device_count()
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed in v3 of SentenceTransformers.",
@@ -1051,6 +1052,10 @@ class SentenceTransformer(nn.Sequential):
             optimizers.append(optimizer)
             schedulers.append(scheduler_obj)
 
+        if self.n_gpu > 1:
+            for train_idx in range(len(loss_models)):
+                loss_models[train_idx] = torch.nn.DataParallel(loss_models[train_idx])
+
         global_step = 0
         data_iterators = [iter(dataloader) for dataloader in dataloaders]
 
@@ -1086,6 +1091,9 @@ class SentenceTransformer(nn.Sequential):
                         with torch.autocast(device_type=self.device.type):
                             loss_value = loss_model(features, labels)
 
+                        if self.n_gpu > 1:
+                            loss_value = loss_value.mean()
+
                         scale_before_step = scaler.get_scale()
                         scaler.scale(loss_value).backward()
                         scaler.unscale_(optimizer)
@@ -1096,6 +1104,10 @@ class SentenceTransformer(nn.Sequential):
                         skip_scheduler = scaler.get_scale() != scale_before_step
                     else:
                         loss_value = loss_model(features, labels)
+
+                        if self.n_gpu > 1:
+                            loss_value = loss_value.mean()
+
                         loss_value.backward()
                         torch.nn.utils.clip_grad_norm_(loss_model.parameters(), max_grad_norm)
                         optimizer.step()
